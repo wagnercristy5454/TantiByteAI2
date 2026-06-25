@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">Tanti Byte AI</string>
+    <!-- suppress TyposInstringsXml -->
+    <string name="app_name" translatable="false">Tanti Byte AI</string>
 </resources>
