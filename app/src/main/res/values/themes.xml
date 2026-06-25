@@ -1,10 +1,9 @@
 <resources>
-    <style name="Theme.TantiByteAI" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="colorPrimary">#1E88E5</item>
-        <item name="colorPrimaryDark">#0D47A1</item>
-        <item name="colorAccent">#42A5F5</item>
+    <!-- Theme principal - foloseste doar SDK Android built-in, fara dependente externe -->
+    <style name="Theme.TantiByteAI" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">#FF121212</item>
         <item name="android:statusBarColor">#FF000000</item>
         <item name="android:navigationBarColor">#FF000000</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>
