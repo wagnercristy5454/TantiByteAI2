@@ -1,6 +1,10 @@
 package com.tantibyteai.app
 
+import android.content.Intent
 import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.*
@@ -27,20 +31,32 @@ import androidx.compose.ui.unit.sp
 import com.tantibyteai.app.commands.CommandDispatcher
 import com.tantibyteai.app.model.PersonaProfile
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 data class ChatMessage(val text: String, val isUser: Boolean)
 
 class MainActivity : ComponentActivity() {
     private val persona = PersonaProfile()
     private val dispatcher by lazy { CommandDispatcher(this) }
+    private var speechRecognizer: SpeechRecognizer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
         setContent {
             TantiByteAITheme {
-                ChatScreen(persona = persona, dispatcher = dispatcher)
+                ChatScreen(
+                    persona = persona,
+                    dispatcher = dispatcher,
+                    speechRecognizer = speechRecognizer
+                )
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        speechRecognizer?.destroy()
     }
 }
 
@@ -59,17 +75,62 @@ fun TantiByteAITheme(content: @Composable () -> Unit) {
 }
 
 @Composable
-fun ChatScreen(persona: PersonaProfile, dispatcher: CommandDispatcher) {
+fun ChatScreen(
+    persona: PersonaProfile,
+    dispatcher: CommandDispatcher,
+    speechRecognizer: SpeechRecognizer?
+) {
     val messages = remember { mutableStateListOf<ChatMessage>() }
     var inputText by remember { mutableStateOf("") }
+    var isListening by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         messages.add(ChatMessage(
-            "Salut ${persona.defaultAddress}! Sunt ${persona.name}. Spune-mi ce vrei sa fac!",
+            "Salut ${persona.defaultAddress}! Sunt ${persona.name}. Scrie sau vorbeste!",
             isUser = false
         ))
+    }
+
+    fun sendMessage(text: String) {
+        if (text.isBlank()) return
+        messages.add(ChatMessage(text, isUser = true))
+        dispatcher.handleFreeText(text)
+        val reply = getAIReply(text)
+        messages.add(ChatMessage(reply, isUser = false))
+        scope.launch {
+            if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+        }
+    }
+
+    fun startListening() {
+        if (speechRecognizer == null) return
+        isListening = true
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ro-RO")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "ro-RO")
+            putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        }
+        speechRecognizer.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() { isListening = false }
+            override fun onError(error: Int) { isListening = false }
+            override fun onPartialResults(partialResults: Bundle?) {}
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+            override fun onResults(results: Bundle?) {
+                isListening = false
+                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                val spoken = matches?.firstOrNull() ?: return
+                sendMessage(spoken)
+            }
+        })
+        speechRecognizer.startListening(intent)
     }
 
     Column(
@@ -77,6 +138,7 @@ fun ChatScreen(persona: PersonaProfile, dispatcher: CommandDispatcher) {
             .fillMaxSize()
             .background(Color(0xFF121212))
     ) {
+        // Header
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -92,15 +154,17 @@ fun ChatScreen(persona: PersonaProfile, dispatcher: CommandDispatcher) {
             )
         }
 
+        // Avatar animat central - palpaie cand asculta
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 16.dp),
             contentAlignment = Alignment.Center
         ) {
-            PulsingAvatar()
+            PulsingAvatar(isListening = isListening)
         }
 
+        // Mesaje
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -108,11 +172,10 @@ fun ChatScreen(persona: PersonaProfile, dispatcher: CommandDispatcher) {
                 .padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(messages) { msg ->
-                MessageBubble(msg)
-            }
+            items(messages) { msg -> MessageBubble(msg) }
         }
 
+        // Bara de input cu microfon langa text
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -120,6 +183,25 @@ fun ChatScreen(persona: PersonaProfile, dispatcher: CommandDispatcher) {
                 .padding(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Buton microfon - stanga sau dreapta textului
+            IconButton(
+                onClick = { startListening() },
+                modifier = Modifier
+                    .size(48.dp)
+                    .background(
+                        if (isListening) Color(0xFF43A047) else Color(0xFF333333),
+                        CircleShape
+                    )
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Mic,
+                    contentDescription = "Microfon",
+                    tint = if (isListening) Color.White else Color(0xFF42A5F5)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
             OutlinedTextField(
                 value = inputText,
                 onValueChange = { inputText = it },
@@ -135,21 +217,15 @@ fun ChatScreen(persona: PersonaProfile, dispatcher: CommandDispatcher) {
                 shape = RoundedCornerShape(24.dp),
                 maxLines = 3
             )
+
             Spacer(modifier = Modifier.width(8.dp))
+
             IconButton(
                 onClick = {
-                    val userText = inputText.trim()
-                    if (userText.isNotEmpty()) {
-                        messages.add(ChatMessage(userText, isUser = true))
+                    val text = inputText.trim()
+                    if (text.isNotEmpty()) {
                         inputText = ""
-                        dispatcher.handleFreeText(userText)
-                        val reply = getAIReply(userText)
-                        messages.add(ChatMessage(reply, isUser = false))
-                        scope.launch {
-                            if (messages.isNotEmpty()) {
-                                listState.animateScrollToItem(messages.size - 1)
-                            }
-                        }
+                        sendMessage(text)
                     }
                 },
                 modifier = Modifier
@@ -163,34 +239,55 @@ fun ChatScreen(persona: PersonaProfile, dispatcher: CommandDispatcher) {
 }
 
 @Composable
-fun PulsingAvatar() {
+fun PulsingAvatar(isListening: Boolean) {
     val transition = rememberInfiniteTransition(label = "pulse")
-    val scale by transition.animateFloat(
-        initialValue = 0.88f,
-        targetValue = 1.12f,
+    val normalScale by transition.animateFloat(
+        initialValue = 0.92f,
+        targetValue = 1.08f,
         animationSpec = infiniteRepeatable(
-            animation = tween(900, easing = FastOutSlowInEasing),
+            animation = tween(1000, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
-        label = "avatarScale"
+        label = "normalScale"
     )
+    val listeningScale by transition.animateFloat(
+        initialValue = 0.80f,
+        targetValue = 1.20f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(300, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "listeningScale"
+    )
+    val scale = if (isListening) listeningScale else normalScale
+    val colors = if (isListening)
+        listOf(Color(0xFF43A047), Color(0xFF1B5E20))
+    else
+        listOf(Color(0xFF42A5F5), Color(0xFF0D47A1))
+
     Box(
         modifier = Modifier
             .size(110.dp)
             .scale(scale)
             .background(
-                brush = Brush.radialGradient(
-                    colors = listOf(Color(0xFF42A5F5), Color(0xFF0D47A1))
-                ),
+                brush = Brush.radialGradient(colors = colors),
                 shape = CircleShape
             ),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = Icons.Default.Mic,
-            contentDescription = "Tanti Byte AI",
+            contentDescription = "AI Avatar",
             tint = Color.White,
             modifier = Modifier.size(52.dp)
+        )
+    }
+    if (isListening) {
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Ascult...",
+            color = Color(0xFF43A047),
+            fontSize = 13.sp
         )
     }
 }
@@ -218,24 +315,24 @@ fun getAIReply(input: String): String {
     val t = input.lowercase().trim()
     return when {
         t.contains("salut") || t.contains("buna") || t.contains("hey") ->
-            "Salut fraiere! Gata sa te ajut, zi ce vrei!"
+            "Salut fraiere! Gata sa te ajut!"
         t.contains("cum esti") || t.contains("ce mai faci") ->
-            "In forma maxima fraiere! Ai nevoie de ceva?"
+            "In forma maxima fraiere!"
         t.contains("multumesc") || t.contains("mersi") ->
-            "Cu placere fraiere! Altceva?"
+            "Cu placere fraiere!"
         t.contains("maps") || t.contains("navigatie") || t.contains("drum") ->
-            "Pornesc Google Maps acum fraiere!"
+            "Pornesc Google Maps fraiere!"
         t.contains("youtube") || t.contains("video") ->
-            "Deschid YouTube fraiere, bucura-te!"
+            "Deschid YouTube fraiere!"
         t.contains("suna") || t.contains("apel") || t.contains("telefon") ->
-            "Deschid telefonul fraiere, formeaza numarul!"
-        t.contains("whatsapp") || t.contains("wa") ->
+            "Deschid telefonul fraiere!"
+        t.contains("whatsapp") ->
             "Deschid WhatsApp fraiere!"
         t.contains("browser") || t.contains("internet") || t.contains("google") ->
             "Deschid browserul fraiere!"
         t.contains("ajutor") || t.contains("help") || t.contains("comenzi") ->
-            "Pot face: maps, youtube, suna, whatsapp, browser. Incearca fraiere!"
-        t.isEmpty() -> "Scrie ceva fraiere, te ascult!"
-        else -> "Nu am prins '${t.take(20)}...' dar incearca: maps, youtube, suna, whatsapp fraiere!"
+            "Pot face: maps, youtube, suna, whatsapp, browser fraiere!"
+        t.isEmpty() -> "Spune ceva fraiere!"
+        else -> "Nu am inteles '${t.take(20)}', incearca: maps, youtube, suna fraiere!"
     }
 }
